@@ -1,0 +1,28 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Environment variables — never commit secrets
+.env
+
+# ChromaDB data — contains indexed document chunks
+data/chroma/
+
+# Source documents — copyrighted PDFs
+documents/
+
+# Logs
+logs/*.db
+logs/*.csv
+
+# Mac system files
+.DS_Store
+
+# Docker
+*.tar
+
+# Old requirements
+src/requirements.txt
