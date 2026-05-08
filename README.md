@@ -2,6 +2,7 @@
 
 > Production RAG pipeline for Siemens Healthineers clinical document search, deployed on GCP Cloud Run.
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Chat%20UI-teal)](https://clinical-rag-service-324111066236.europe-west1.run.app)
 [![Live API](https://img.shields.io/badge/Live%20API-GCP%20Cloud%20Run-blue)](https://clinical-rag-service-324111066236.europe-west1.run.app/docs)
 [![Python](https://img.shields.io/badge/Python-3.11-green)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.136-009688)](https://fastapi.tiangolo.com)
@@ -13,7 +14,9 @@
 
 ClinicalRAG allows medical professionals to search and query Siemens Healthineers clinical documents using natural language. Instead of manually reading through technical PDFs, users ask questions and receive precise answers with source references in under 3 seconds.
 
-**Live Demo:** https://clinical-rag-service-324111066236.europe-west1.run.app/docs
+**Live Chat UI:** https://clinical-rag-service-324111066236.europe-west1.run.app
+
+**Live API Docs:** https://clinical-rag-service-324111066236.europe-west1.run.app/docs
 
 ---
 
@@ -21,6 +24,8 @@ ClinicalRAG allows medical professionals to search and query Siemens Healthineer
 
 ```
 User Question
+      ↓
+Chat UI (served at /) or REST API (/query)
       ↓
 FastAPI REST API (GCP Cloud Run)
       ↓
@@ -34,7 +39,7 @@ Safety Guardrails (3 rules)
       ↓
 Groq LLM (Llama 3.3 70B) + Conversation Memory
       ↓
-Answer + Sources + Metadata
+Answer + Sources + Follow-up Suggestions
       ↓
 Async Audit Log → BigQuery
 ```
@@ -43,13 +48,18 @@ Async Audit Log → BigQuery
 
 ## Key Features
 
+- **Professional chat UI** — dark theme interface with sidebar, conversation history, and example queries
+- **Department filter** — filter answers by department (Molecular Imaging, Oncology, Operations, Radiology Services)
+- **Follow-up suggestions** — LLM generates 3 clickable follow-up questions after each answer
+- **Rename conversations** — hover over any conversation in sidebar to rename it
 - **Two-stage retrieval** — semantic search retrieves 20 candidates, CrossEncoder reranker selects best 5
 - **Conversation memory** — session-based multi-turn conversations with follow-up question support
 - **Safety guardrails** — blocks medical advice requests, off-topic questions, and low-relevance queries
 - **Weak retrieval detection** — automatically switches to memory-only prompt when retrieval scores are negative
-- **Async audit logging** — every query logged to BigQuery with retry logic and exponential backoff, never blocking API response
+- **Data-driven guardrail threshold** — threshold of 0.30 derived from evaluation across 10 labeled queries
+- **Async audit logging** — every query logged to BigQuery with retry logic and exponential backoff
 - **Production Docker** — multi-stage build, non-root user, security vulnerability scanning, pinned base image
-- **GCP deployment** — Cloud Run with min-instances, service account least privilege, Artifact Registry
+- **GCP deployment** — Cloud Run with min-instances, service account least privilege, Artifact Registry cleanup policies
 
 ---
 
@@ -79,7 +89,7 @@ clinical-rag/
 ├── src/
 │   ├── ingest.py          # Phase 1 — PDF ingestion, chunking, embedding, ChromaDB storage
 │   ├── query_engine.py    # Phase 2 — RAG pipeline, reranking, guardrails, conversation memory
-│   ├── api.py             # Phase 3 — FastAPI REST API with session management
+│   ├── api.py             # Phase 3 — FastAPI REST API + chat UI with session management
 │   └── logger.py          # Phase 4 — Async BigQuery audit logging with retry logic
 ├── data/
 │   └── chroma/            # ChromaDB persistent storage (excluded from Git)
@@ -87,6 +97,7 @@ clinical-rag/
 ├── logs/                  # Audit log exports (excluded from Git)
 ├── Dockerfile             # Multi-stage production build
 ├── .dockerignore          # Excludes venv, .env, chroma data from Docker context
+├── .env.example           # Environment variable template
 ├── Makefile               # Shortcuts: make build, make run-local, make push, make deploy
 ├── requirements.txt       # 17 direct dependencies
 └── README.md              # This file
@@ -94,7 +105,40 @@ clinical-rag/
 
 ---
 
+## Chat UI
+
+The system includes a professional chat interface accessible at the root URL:
+
+**Features:**
+- Sidebar with conversation history (persisted in browser localStorage)
+- Rename any conversation by hovering and clicking the pencil icon
+- Department filter to restrict search to specific clinical areas
+- Clickable follow-up question suggestions after each answer
+- Safety guardrail responses shown in red with reason displayed
+- Source document chips showing which PDFs were referenced
+
+**Try these queries in order:**
+
+**Query 1 — Document search:**
+Type or click the example: `What is xSPECT Bone and what are its clinical benefits?`
+
+**Query 2 — Conversation memory:**
+Click one of the suggested follow-up chips that appear below the answer.
+
+**Query 3 — Department filter:**
+Select "Molecular Imaging" from the dropdown, then ask: `What are the operational excellence benefits?`
+Only Molecular Imaging documents will be searched.
+
+**Query 4 — Safety guardrail:**
+Type: `Should I take ibuprofen for my headache?`
+The system will professionally refuse and explain why.
+
+---
+
 ## API Endpoints
+
+### GET /
+Serves the professional chat UI.
 
 ### GET /health
 Returns system status and configuration.
@@ -110,13 +154,14 @@ Returns system status and configuration.
 ```
 
 ### POST /query
-Accepts a question and session_id, returns answer with sources.
+Accepts a question and session_id, returns answer with sources and follow-up suggestions.
 
 **Request:**
 ```json
 {
   "question": "What is xSPECT Bone and what are its clinical benefits?",
-  "session_id": "your-session-id"
+  "session_id": "your-session-id",
+  "department_filter": "all"
 }
 ```
 
@@ -130,7 +175,12 @@ Accepts a question and session_id, returns answer with sources.
   "guardrail_triggered": false,
   "guardrail_reason": "passed",
   "rerank_method": "cross-encoder",
-  "response_time_seconds": 2.2
+  "response_time_seconds": 2.2,
+  "follow_up_questions": [
+    "What bones does xSPECT Bone typically image?",
+    "How does xSPECT improve diagnosis accuracy?",
+    "Is xSPECT Bone FDA approved?"
+  ]
 }
 ```
 
@@ -177,11 +227,13 @@ python src/ingest.py
 
 ### 5. Start the API
 ```bash
-uvicorn src.api:app --reload --port 8000
+ENABLE_BIGQUERY=false uvicorn src.api:app --reload --port 8000
 ```
 
-### 6. Test at Swagger UI
-Open http://localhost:8000/docs
+### 6. Open the chat UI
+Open http://localhost:8000
+
+Or test via Swagger UI at http://localhost:8000/docs
 
 ---
 
@@ -192,40 +244,10 @@ Open http://localhost:8000/docs
 make build
 
 # Run locally
-docker run -p 8080:8080 --env-file .env clinical-rag:v8
+docker run -p 8080:8080 --env-file .env -e ENABLE_BIGQUERY=false clinical-rag:v12
 
 # Test
 curl http://localhost:8080/health
-```
-
----
-
-## Try the Live API
-
-Open the Swagger UI and test these three queries in order:
-
-**Query 1 — Document search:**
-```json
-{
-  "question": "What is xSPECT Bone and what are its clinical benefits?",
-  "session_id": "demo-001"
-}
-```
-
-**Query 2 — Conversation memory (same session_id):**
-```json
-{
-  "question": "Can you elaborate on the first benefit you mentioned?",
-  "session_id": "demo-001"
-}
-```
-
-**Query 3 — Safety guardrail:**
-```json
-{
-  "question": "Should I take ibuprofen for my headache?",
-  "session_id": "demo-001"
-}
 ```
 
 ---
@@ -239,6 +261,8 @@ Open the Swagger UI and test these three queries in order:
 - [ ] Add Power BI dashboard connected to BigQuery audit logs
 - [ ] Add automated pytest test suite
 - [ ] Implement dead letter queue for failed BigQuery writes using Cloud Pub/Sub
+- [ ] Query expansion for short/abbreviated questions using LLM rewriting
+- [ ] Expand knowledge base beyond Siemens documents to broader clinical research
 
 ---
 
@@ -248,6 +272,7 @@ Built as a portfolio project demonstrating production AI engineering skills:
 - RAG pipeline design and implementation
 - Vector database setup and management
 - REST API development and deployment
+- Professional chat UI with advanced features
 - Docker containerization with security best practices
 - GCP cloud deployment and monitoring
 - Async audit logging and analytics pipeline
