@@ -1,3 +1,4 @@
+import os
 import json
 import logging
 from datetime import datetime
@@ -23,6 +24,7 @@ logger = logging.getLogger(__name__)
 # Service account attached to Cloud Run
 # handles authentication automatically
 # ─────────────────────────────────────────────
+ENABLE_BIGQUERY = os.environ.get("ENABLE_BIGQUERY", "true").lower() == "true"
 PROJECT_ID = "project-df0cbdfe-9de3-4681-b3b"
 DATASET_ID = "clinical_rag_logs"
 TABLE_ID = "query_logs"
@@ -41,7 +43,17 @@ executor = ThreadPoolExecutor(max_workers=2)
 # account automatically via Application Default
 # Credentials — no credentials file needed
 # ─────────────────────────────────────────────
-client = bigquery.Client(project=PROJECT_ID)
+if ENABLE_BIGQUERY:
+    try:
+        client = bigquery.Client(project=PROJECT_ID)
+        logger.info("BigQuery client initialized successfully")
+    except Exception as e:
+        logger.warning(f"BigQuery client failed to initialize: {e}")
+        ENABLE_BIGQUERY = False
+        client = None
+else:
+    client = None
+    logger.info("BigQuery logging disabled via ENABLE_BIGQUERY=false")
 
 
 # ─────────────────────────────────────────────
